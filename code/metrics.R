@@ -32,17 +32,3 @@ compute_metrics <- function(result, dat, X_test, y_test) {
     clip_rate   = result$clip_rate
   )
 }
-
-set.seed(1)
-dat    <- generate_data(case = 1)
-dat_te <- generate_data(case = 1)
-
-res_full   <- run_full(dat)
-res_oracle <- run_opt_hetero_oracle(dat, k = 500)
-
-m_full   <- compute_metrics(res_full,   dat, dat_te$X, dat_te$y)
-m_oracle <- compute_metrics(res_oracle, dat, dat_te$X, dat_te$y)
-
-# FULL이 가장 낮은 excess risk, test MSE여야 함
-print(m_full)
-print(m_oracle)
