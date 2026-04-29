@@ -1,0 +1,14 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.positai
+
+# R 관련
+.Rproj.user/
+.Rhistory
+.RData
+
+# 결과 파일 (용량 큼)
+results/*.rds
+results/*.csv
