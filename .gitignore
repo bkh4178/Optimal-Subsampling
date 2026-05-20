@@ -12,3 +12,6 @@
 # 결과 파일 (용량 큼)
 results/*.rds
 results/*.csv
+
+
+.DS_Store
