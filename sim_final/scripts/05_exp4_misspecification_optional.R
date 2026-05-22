@@ -3,7 +3,6 @@
 #
 # Plugin 모형 4종:
 #   correct_scale   : abs_resid ~ abs_s_full (sigma-scale, Z1,Z2,Z6,Z8)
-#   variance_linear : resid^2   ~ abs_s_full (variance-scale, linear only)
 #   mild_omitted    : abs_resid ~ abs_s_mild (sigma-scale, Z8 누락)
 #   severe_omitted  : abs_resid ~ abs_s_severe (sigma-scale, Z6+Z8 누락)
 # 베이스라인 5종: FULL, SRS, LEV-IPW, OPT-homo, OPT-hetero-oracle
@@ -59,18 +58,6 @@ est_sigma2_correct_scale <- function(dat, idx_pilot, beta_pilot) {
   .clip_positive(sigma_hat)^2
 }
 
-# (2) Variance-scale 선형: resid^2 ~ abs_s_full (quadratic 없음)
-est_sigma2_variance_linear <- function(dat, idx_pilot, beta_pilot) {
-  resid_pilot  <- dat$y[idx_pilot] -
-                  as.numeric(dat$X[idx_pilot, , drop = FALSE] %*% beta_pilot)
-  abs_s_pilot  <- make_abs_s(dat$X[idx_pilot, , drop = FALSE])
-  pilot_df     <- data.frame(resid2 = resid_pilot^2, abs_s = abs_s_pilot)
-  var_model    <- lm(resid2 ~ abs_s, data = pilot_df)
-  sigma2_hat   <- as.numeric(predict(var_model,
-                    newdata = data.frame(abs_s = make_abs_s(dat$X))))
-  .clip_positive(sigma2_hat)
-}
-
 # (3) Mild 오명세: abs_resid ~ abs_s_mild (Z8 누락)
 est_sigma2_mild_omitted <- function(dat, idx_pilot, beta_pilot) {
   resid_pilot     <- dat$y[idx_pilot] -
@@ -108,7 +95,6 @@ run_one_rep_exp4 <- function(dat, k, X_test, mu_test, y_test, n0 = n0_default) {
 
   # 4종 plugin sigma^2 추정
   sigma2_correct   <- est_sigma2_correct_scale(dat, idx_pilot, beta_pilot)
-  sigma2_varlinear <- est_sigma2_variance_linear(dat, idx_pilot, beta_pilot)
   sigma2_mild      <- est_sigma2_mild_omitted(dat, idx_pilot, beta_pilot)
   sigma2_severe    <- est_sigma2_severe_omitted(dat, idx_pilot, beta_pilot)
 
@@ -121,7 +107,6 @@ run_one_rep_exp4 <- function(dat, k, X_test, mu_test, y_test, n0 = n0_default) {
     )
   }
   diag_correct   <- make_diag(sigma2_correct)
-  diag_varlinear <- make_diag(sigma2_varlinear)
   diag_mild      <- make_diag(sigma2_mild)
   diag_severe    <- make_diag(sigma2_severe)
 
@@ -221,8 +206,6 @@ run_one_rep_exp4 <- function(dat, k, X_test, mu_test, y_test, n0 = n0_default) {
     run_method("OPT-hetero-oracle", "baseline",        sqrt(dat$sigma2_vec * dat$ell)),
     run_method("plugin-correct",    "correct_scale",   sqrt(sigma2_correct   * dat$ell),
                sigma_cor = diag_correct$sigma_cor,   score_cor = diag_correct$score_cor),
-    run_method("plugin-varlinear",  "variance_linear", sqrt(sigma2_varlinear * dat$ell),
-               sigma_cor = diag_varlinear$sigma_cor, score_cor = diag_varlinear$score_cor),
     run_method("plugin-mild",       "mild_omitted",    sqrt(sigma2_mild      * dat$ell),
                sigma_cor = diag_mild$sigma_cor,      score_cor = diag_mild$score_cor),
     run_method("plugin-severe",     "severe_omitted",  sqrt(sigma2_severe    * dat$ell),
@@ -234,8 +217,8 @@ run_one_rep_exp4 <- function(dat, k, X_test, mu_test, y_test, n0 = n0_default) {
 
 K_EXP4 <- 1000L
 
-PLUGIN_SETTINGS <- c("correct_scale", "variance_linear", "mild_omitted", "severe_omitted")
-PLUGIN_METHODS  <- c("plugin-correct", "plugin-varlinear", "plugin-mild", "plugin-severe")
+PLUGIN_SETTINGS <- c("correct_scale", "mild_omitted", "severe_omitted")
+PLUGIN_METHODS  <- c("plugin-correct", "plugin-mild", "plugin-severe")
 BASE_METHODS    <- c("FULL", "SRS", "LEV-IPW", "OPT-homo", "OPT-hetero-oracle")
 ALL_METHODS_EXP4 <- c(BASE_METHODS, PLUGIN_METHODS)
 
@@ -244,7 +227,7 @@ cat(" Exp4: Plugin 오명세 실험\n")
 cat("====================================================\n")
 cat(sprintf(" N=%d, k=%d, n0=%d, n_rep=%d\n", N, K_EXP4, n0_default, n_rep))
 cat(sprintf(" %s\n", dgp_sigma_label))
-cat(" Plugin 4종: correct_scale / variance_linear / mild_omitted / severe_omitted\n")
+cat(" Plugin 3종: correct_scale / mild_omitted / severe_omitted\n")
 cat("====================================================\n\n")
 
 dat     <- generate_data_final(N,      beta_true, heteroscedastic = TRUE, seed = SEED_DATA)

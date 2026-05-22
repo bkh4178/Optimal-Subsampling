@@ -19,7 +19,7 @@ source("R/05_mcse_summary.R")
 ensure_dir(DIR_EXP0)
 
 N_REP_EXP0 <- 500L
-KS_EXP0    <- c(400L, 600L, 800L)
+KS_EXP0    <- c(400L, 600L, 800L, 1000L, 2000L)
 
 cat("====================================================\n")
 cat(" Exp0: 등분산 sanity check\n")

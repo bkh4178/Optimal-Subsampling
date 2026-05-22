@@ -179,19 +179,17 @@ cat("Building Figure 3 ...\n")
 
 exp4 <- readRDS(file.path("results", "raw", "exp4", "exp4_misspecification.rds"))
 
-PLUGIN_SETTINGS <- c("correct_scale", "variance_linear", "mild_omitted", "severe_omitted")
-PLUGIN_METHODS  <- c("plugin-correct", "plugin-varlinear", "plugin-mild", "plugin-severe")
+PLUGIN_SETTINGS <- c("correct_scale", "mild_omitted", "severe_omitted")
+PLUGIN_METHODS  <- c("plugin-correct", "plugin-mild", "plugin-severe")
 
 SETTING_LABELS <- c(
   "correct_scale"   = "Correct\n(sigma-scale)",
-  "variance_linear" = "Var-linear",
   "mild_omitted"    = "Mild\nomitted",
   "severe_omitted"  = "Severe\nomitted"
 )
 
 SETTING_COLORS <- c(
   "correct_scale"   = "#009E73",
-  "variance_linear" = "#0072B2",
   "mild_omitted"    = "#E69F00",
   "severe_omitted"  = "#D55E00"
 )
@@ -228,6 +226,7 @@ pd_df <- do.call(rbind, lapply(seq_along(PLUGIN_SETTINGS), function(i) {
 }))
 
 sum3 <- merge(sc_df, pd_df, by = "misspec_setting")
+sum3 <- sum3[complete.cases(sum3), ]
 sum3$misspec_setting <- factor(sum3$misspec_setting, levels = PLUGIN_SETTINGS)
 sum3$label <- SETTING_LABELS[as.character(sum3$misspec_setting)]
 
@@ -245,7 +244,7 @@ p3 <- ggplot(sum3, aes(x = mean_score_cor, y = mean_diff, color = misspec_settin
             size = 3, lineheight = 0.85, show.legend = FALSE) +
   scale_color_manual(
     values = SETTING_COLORS,
-    labels = c("Correct (sigma-scale)", "Var-linear", "Mild omitted", "Severe omitted")
+    labels = c("Correct\n(sigma-scale)", "Mild omitted", "Severe omitted")
   ) +
   labs(
     x     = "Mean score correlation (plugin vs oracle)",
@@ -255,11 +254,169 @@ p3 <- ggplot(sum3, aes(x = mean_score_cor, y = mean_diff, color = misspec_settin
   theme_bw(base_size = 12) +
   theme(
     legend.position  = "bottom",
-    panel.grid.minor = element_blank()
+    legend.text      = element_text(size = 8),
+    panel.grid.minor = element_blank(),
+    plot.margin      = margin(5.5, 20, 5.5, 5.5)
   )
 
 ggsave(file.path(dir_main, "fig3_exp4_scatter.pdf"),
-       p3, width = 6, height = 5)
+       p3, width = 8, height = 5)
 cat("  Saved: figures/main/fig3_exp4_scatter.pdf\n")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Figure 4 — Exp3-a: Stage decomposition stacked bar (k=1000, N=100,000)
+# ─────────────────────────────────────────────────────────────────────────────
+cat("Building Figure 4 ...\n")
+
+exp3_decomp <- readRDS(file.path("results", "raw", "exp3",
+                                 "exp3_runtime_decomposed.rds"))
+fig4_dat <- exp3_decomp[exp3_decomp$k == 1000, ]
+
+RUNTIME_METHOD_LINES <- c(
+  "FULL", "SRS", "LEV-IPW", "OPT-homo",
+  "OPT-hetero-oracle", "OPT-hetero-plugin"
+)
+RUNTIME_METHOD_LABELS <- c(
+  "FULL"              = "FULL OLS",
+  "SRS"               = "SRS",
+  "LEV-IPW"           = "LEV-IPW",
+  "OPT-homo"          = "OPT-homo",
+  "OPT-hetero-oracle" = "OPT-oracle",
+  "OPT-hetero-plugin" = "OPT-plugin"
+)
+
+STAGE_ORDER_FIG <- c(
+  "pilot_draw", "pilot_fit", "variance_est",
+  "moment_matrix", "score_compute", "subsample_draw", "final_fit"
+)
+STAGE_COLORS <- c(
+  "pilot_draw"     = "#CC79A7",
+  "pilot_fit"      = "#E69F00",
+  "variance_est"   = "#D55E00",
+  "moment_matrix"  = "#0072B2",
+  "score_compute"  = "#56B4E9",
+  "subsample_draw" = "#009E73",
+  "final_fit"      = "#999999"
+)
+STAGE_LABELS <- c(
+  "pilot_draw"     = "Pilot draw",
+  "pilot_fit"      = "Pilot fit",
+  "variance_est"   = "Variance est.",
+  "moment_matrix"  = "Moment matrix",
+  "score_compute"  = "Score compute",
+  "subsample_draw" = "Subsample draw",
+  "final_fit"      = "Final fit"
+)
+
+fig4_dat$stage <- factor(fig4_dat$stage, levels = STAGE_ORDER_FIG)
+fig4_dat$method <- factor(fig4_dat$method, levels = RUNTIME_METHOD_LINES)
+fig4_dat <- fig4_dat[!is.na(fig4_dat$stage) & !is.na(fig4_dat$method), ]
+
+p4 <- ggplot(fig4_dat,
+             aes(x = method, y = mean_time, fill = stage)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.6) +
+  scale_fill_manual(
+    values = STAGE_COLORS,
+    labels = STAGE_LABELS,
+    drop   = FALSE
+  ) +
+  scale_x_discrete(
+    labels = RUNTIME_METHOD_LABELS[RUNTIME_METHOD_LINES],
+    drop   = FALSE
+  ) +
+  labs(
+    x    = "Method",
+    y    = "Mean runtime (seconds)",
+    fill = "Stage",
+    title = "Runtime decomposition by stage (k = 1000, N = 100,000)"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position  = "right",
+    panel.grid.minor = element_blank(),
+    axis.text.x      = element_text(angle = 25, hjust = 1)
+  )
+
+ggsave(file.path(dir_main, "fig4_runtime_stacked.pdf"),
+       p4, width = 8, height = 5)
+cat("  Saved: figures/main/fig4_runtime_stacked.pdf\n")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Figure 5 — Exp3-b: N scaling line plot
+# ─────────────────────────────────────────────────────────────────────────────
+cat("Building Figure 5 ...\n")
+
+exp3_scale <- readRDS(file.path("results", "raw", "exp3",
+                                "exp3_runtime_scaling.rds"))
+
+RUNTIME_METHOD_COLORS <- c(
+  "FULL"              = "#333333",
+  "SRS"               = "#999999",
+  "LEV-IPW"           = "#0072B2",
+  "OPT-homo"          = "#009E73",
+  "OPT-hetero-oracle" = "#D55E00",
+  "OPT-hetero-plugin" = "#CC79A7"
+)
+RUNTIME_METHOD_SHAPES <- c(
+  "FULL"              = 3L,
+  "SRS"               = 16L,
+  "LEV-IPW"           = 17L,
+  "OPT-homo"          = 15L,
+  "OPT-hetero-oracle" = 18L,
+  "OPT-hetero-plugin" = 8L
+)
+
+scale_total_rows <- list()
+for (m in RUNTIME_METHOD_LINES) {
+  for (nv in sort(unique(exp3_scale$N))) {
+    sub <- exp3_scale[exp3_scale$method == m & exp3_scale$N == nv, ]
+    if (nrow(sub) == 0L) next
+    scale_total_rows[[length(scale_total_rows) + 1L]] <- data.frame(
+      method     = m,
+      N          = nv,
+      total_mean = sum(sub$mean_time),
+      stringsAsFactors = FALSE
+    )
+  }
+}
+scale_total_df <- do.call(rbind, scale_total_rows)
+scale_total_df$method <- factor(
+  scale_total_df$method, levels = RUNTIME_METHOD_LINES
+)
+
+n_breaks <- sort(unique(scale_total_df$N))
+n_labels <- format(n_breaks, big.mark = ",", scientific = FALSE, trim = TRUE)
+
+p5 <- ggplot(scale_total_df,
+             aes(x = N, y = total_mean,
+                 color = method, shape = method)) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 2.5) +
+  scale_color_manual(
+    values = RUNTIME_METHOD_COLORS[RUNTIME_METHOD_LINES],
+    labels = RUNTIME_METHOD_LABELS[RUNTIME_METHOD_LINES]
+  ) +
+  scale_shape_manual(
+    values = RUNTIME_METHOD_SHAPES[RUNTIME_METHOD_LINES],
+    labels = RUNTIME_METHOD_LABELS[RUNTIME_METHOD_LINES]
+  ) +
+  scale_x_log10(breaks = n_breaks, labels = n_labels) +
+  scale_y_log10() +
+  labs(
+    x     = "Full-data size N (log scale)",
+    y     = "Mean total runtime, seconds (log scale)",
+    color = "Method",
+    shape = "Method"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position  = "bottom",
+    panel.grid.minor = element_blank(),
+    axis.text.x      = element_text(angle = 20, hjust = 1)
+  )
+
+ggsave(file.path(dir_main, "fig5_runtime_scaling.pdf"),
+       p5, width = 7, height = 4.5)
+cat("  Saved: figures/main/fig5_runtime_scaling.pdf\n")
 
 cat("\nAll figures done.\n")
