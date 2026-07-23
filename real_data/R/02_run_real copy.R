@@ -25,9 +25,6 @@ N_train   <- dat$N_train
 p1 <- ncol(X_train)   # intercept 포함
 N_CORES <- parallel::detectCores()
 
-# Metric2 baseline (sim의 mse0에 대응 -- real data는 true mu 없으므로 FULL로 근사)
-test_mse_full <- mean((y_test - X_test %*% beta_full)^2)
-
 cat(sprintf("N_train = %d / N_test = %d / p+1 = %d\n",
             N_train, length(y_test), p1))
 cat(sprintf("k_grid : %s\n", paste(k_grid, collapse = ", ")))
@@ -56,13 +53,7 @@ predict_rf_parallel <- function(fit, X, n_chunks = N_CORES) {
   unname(result)
 }
 
-# param: |resid| ~ trip_duration(열 3) 로그선형
-# ⚠ trip_distance까지 포함한 전체 모형은 시도했다가 폐기된 경로임
-#   (Notion "3-1. 분산 driver 탐색" 참고: 전체 변수 모형은 plugin이 전 k에서
-#   최하위, MCSE가 LEV-IPW 대비 6배 불안정 -- cor(sigma_hat,ell) Pearson=0.53/
-#   Spearman=0.29로 약해 sigma_hat*sqrt(ell) score가 노이즈만 추가하는 것으로
-#   진단됨. trip_distance/trip_duration 간 collinearity가 원인으로 추정.
-#   단일 변수(trip_duration)로 최종 확정.
+# param: |resid| ~ trip_duration(열 3) 로그선형, 실제 함수형태 모르니 근사
 estimate_sigma_plugin_param <- function(X_pilot, y_pilot, X_full) {
   beta_pilot <- tryCatch(
     as.vector(solve(crossprod(X_pilot), crossprod(X_pilot, y_pilot))),
@@ -79,11 +70,15 @@ estimate_sigma_plugin_param <- function(X_pilot, y_pilot, X_full) {
   X_var_full <- cbind(1, X_full[, 3])
   pred_abs   <- exp(as.vector(X_var_full %*% coef(fit_var)))
 
-  sigma_hat  <- pmax(pred_abs, 1e-10) / sqrt(2 / pi)   # 정규분포 보정
+  sigma_hat  <- pmax(pred_abs, 1e-10) / sqrt(2 / pi)   # param과 동일한 정규분포 보정
   sigma_hat^2                                          # σ² 반환
 }
 
-# nonparam: RF regression of abs_resid on covariates (전체 4개 변수 사용)
+# nonparam: RF regression of abs_resid on covariates
+# ⚠ CORR_FACTOR는 simulation_2plugin/R/03_variance_estimation.R의
+#   estimate_sigma2_plugin_nonparam()이 실제 쓰는 abs_resid->sigma 보정값과
+#   반드시 맞춰야 함 — 지금은 정규분포 가정 하 이론값(sqrt(pi/2))으로 임시 세팅
+
 estimate_sigma_plugin_nonparam <- function(X_pilot, y_pilot, X_full) {
   beta_pilot <- tryCatch(
     as.vector(solve(crossprod(X_pilot), crossprod(X_pilot, y_pilot))),
@@ -105,7 +100,7 @@ estimate_sigma_plugin_nonparam <- function(X_pilot, y_pilot, X_full) {
 
   pred_abs_resid <- predict_rf_parallel(fit, X_full[, -1, drop = FALSE])
   sigma_hat <- pmax(pred_abs_resid, 1e-10) / sqrt(2 / pi)   # param과 동일한 정규분포 보정
-  sigma_hat^2
+  sigma_hat^2                                                # σ² 반환 (nonparam과 스케일 통일)
 }
 
 # =============================================================================
@@ -127,13 +122,6 @@ compute_pilot_scores <- function(seed_rep) {
   )
   t_nonparam <- (proc.time() - t0)[["elapsed"]]
 
-  # 진단용: param vs nonparam sigma_hat 간 상관 (real data엔 true sigma2가 없어
-  # sim의 diag_sigma_cor를 대신할 수 없음 -- 두 plugin이 서로 얼마나 다른 신호를
-  # 보는지 확인하는 보조 지표로만 사용)
-  cor_param_nonparam <- tryCatch(
-    cor(sigma_hat_param, sigma_hat_nonparam), error = function(e) NA_real_
-  )
-
   list(
     score_uni      = rep(1, N_train),
     score_lev      = ell,
@@ -143,7 +131,6 @@ compute_pilot_scores <- function(seed_rep) {
     diag = data.frame(
       sigma_param_mean    = mean(sigma_hat_param),    sigma_param_sd    = sd(sigma_hat_param),
       sigma_nonparam_mean = mean(sigma_hat_nonparam), sigma_nonparam_sd = sd(sigma_hat_nonparam),
-      cor_param_nonparam  = cor_param_nonparam,
       t_param = t_param, t_nonparam = t_nonparam
     )
   )
@@ -151,66 +138,32 @@ compute_pilot_scores <- function(seed_rep) {
 
 # =============================================================================
 # 4. 주어진 score로 한 번 sampling + estimation
-#    컬럼 스키마는 simulation_2plugin의 results_to_rows()와 최대한 정렬:
-#    - er_leading, c1_pi: 둘 다 excess risk leading term(동일 개념의 중복 컬럼,
-#      sim에서 안 지운 것) -> real data엔 true sigma2가 없어 계산 불가, 항상 NA
-#    - pred_mse_N: sim Metric2 analog = N*(test_mse - test_mse_full)
-#    - param_mse_N: sim Metric3 analog = N*mean((beta_hat-beta_full)^2), unweighted
-#    - pseudo_er: A_hat-weighted quadratic form (sim엔 없는 real-data 전용 보조
-#      지표, test set 없이 계산되는 저노이즈 버전 -- Metric1과 혼동 금지)
-#    - diag_sigma_cor / diag_score_cor / diag_sigma_cor_spearman: 계산 불가 -> NA
 # =============================================================================
 run_one_method <- function(name, score, k) {
   pi  <- compute_pi(score, k)
   idx <- which(rbinom(N_train, 1L, pi) == 1L)
+  clip_rate <- mean(pi >= 1 - 1e-9)
 
-  n_clip    <- sum(pi >= 1 - 1e-9)
-  clip_rate <- n_clip / N_train
-  ess_pi    <- (sum(pi))^2 / sum(pi^2)
-  max_weight <- 1 / min(pi)
-
-  na_row <- function(fail_flag) {
-    data.frame(
-      method = name, k = k, fail = fail_flag,
-      er_leading = NA_real_, c1_pi = NA_real_,
-      pseudo_er = NA_real_, pred_mse_N = NA_real_, param_mse_N = NA_real_,
-      test_mse = NA_real_,
-      n_realized = length(idx), n_clip = n_clip, clip_rate = clip_rate,
-      ess_pi = ess_pi, max_weight = max_weight, cond_XtWX = NA_real_,
-      diag_sigma_cor = NA_real_, diag_score_cor = NA_real_,
-      diag_sigma_cor_spearman = NA_real_,
-      stringsAsFactors = FALSE
-    )
+  if (length(idx) < p1 + 1L) {
+    return(data.frame(method = name, k = k, fail = TRUE,
+                       pseudo_er = NA_real_, test_mse = NA_real_,
+                       n_sub = length(idx), clip_rate = clip_rate))
   }
 
-  if (length(idx) < p1 + 1L) return(na_row(TRUE))
-
   beta_hat <- fit_ipw(X_train, y_train, idx, pi)
-  if (is.null(beta_hat)) return(na_row(TRUE))
+  if (is.null(beta_hat)) {
+    return(data.frame(method = name, k = k, fail = TRUE,
+                       pseudo_er = NA_real_, test_mse = NA_real_,
+                       n_sub = length(idx), clip_rate = clip_rate))
+  }
 
-  diff        <- beta_hat - beta_full
-  pseudo_er   <- as.numeric(t(diff) %*% A_hat %*% diff)
-  param_mse_N <- N_train * mean(diff^2)
-  test_mse    <- mean((y_test - X_test %*% beta_hat)^2)
-  pred_mse_N  <- N_train * (test_mse - test_mse_full)
+  diff      <- beta_hat - beta_full
+  pseudo_er <- as.numeric(t(diff) %*% A_hat %*% diff)
+  test_mse  <- mean((y_test - X_test %*% beta_hat)^2)
 
-  cond_XtWX <- tryCatch({
-    Xs <- X_train[idx, , drop = FALSE]
-    Ws <- 1 / pi[idx]
-    kappa(crossprod(Xs, Xs * Ws))
-  }, error = function(e) NA_real_)
-
-  data.frame(
-    method = name, k = k, fail = FALSE,
-    er_leading = NA_real_, c1_pi = NA_real_,
-    pseudo_er = pseudo_er, pred_mse_N = pred_mse_N, param_mse_N = param_mse_N,
-    test_mse = test_mse,
-    n_realized = length(idx), n_clip = n_clip, clip_rate = clip_rate,
-    ess_pi = ess_pi, max_weight = max_weight, cond_XtWX = cond_XtWX,
-    diag_sigma_cor = NA_real_, diag_score_cor = NA_real_,
-    diag_sigma_cor_spearman = NA_real_,
-    stringsAsFactors = FALSE
-  )
+  data.frame(method = name, k = k, fail = FALSE,
+             pseudo_er = pseudo_er, test_mse = test_mse,
+             n_sub = length(idx), clip_rate = clip_rate)
 }
 
 # =============================================================================
@@ -257,24 +210,14 @@ diag_df    <- do.call(rbind, diag_rows)
 rownames(results_df) <- NULL
 
 # ── FULL benchmark: b/k와 무관 -> 1회 계산 후 broadcast ─────────────────────
+test_mse_full <- mean((y_test - X_test %*% beta_full)^2)
 full_rows <- expand.grid(rep = seq_len(B), k = k_grid)
-full_rows$method       <- "FULL"
-full_rows$fail         <- FALSE
-full_rows$er_leading   <- NA_real_
-full_rows$c1_pi        <- NA_real_
-full_rows$pseudo_er    <- 0
-full_rows$pred_mse_N   <- 0
-full_rows$param_mse_N  <- 0
-full_rows$test_mse     <- test_mse_full
-full_rows$n_realized   <- N_train
-full_rows$n_clip       <- 0L
-full_rows$clip_rate    <- 0
-full_rows$ess_pi       <- N_train
-full_rows$max_weight   <- 1
-full_rows$cond_XtWX    <- NA_real_
-full_rows$diag_sigma_cor          <- NA_real_
-full_rows$diag_score_cor          <- NA_real_
-full_rows$diag_sigma_cor_spearman <- NA_real_
+full_rows$method    <- "FULL"
+full_rows$fail      <- FALSE
+full_rows$pseudo_er <- 0
+full_rows$test_mse  <- test_mse_full
+full_rows$n_sub     <- N_train
+full_rows$clip_rate <- 0
 full_rows <- full_rows[, names(results_df)]
 
 results_df <- rbind(results_df, full_rows)
@@ -284,9 +227,6 @@ cat(sprintf("fail 비율: %.4f\n",
             mean(results_df$fail[results_df$method != "FULL"], na.rm = TRUE)))
 cat(sprintf("RF 평균 fit+predict 시간: %.1f초/rep\n",
             mean(diag_df$t_param + diag_df$t_nonparam)))
-cat(sprintf("param vs nonparam sigma_hat 평균 상관: %.4f ± %.4f\n",
-            mean(diag_df$cor_param_nonparam, na.rm = TRUE),
-            sd(diag_df$cor_param_nonparam, na.rm = TRUE) / sqrt(sum(!is.na(diag_df$cor_param_nonparam)))))
 
 # =============================================================================
 # 6. 요약 출력
@@ -295,20 +235,14 @@ sub_df <- results_df[!results_df$fail & results_df$method != "FULL", ]
 methods_order <- c("SRS", "LEV-IPW", "OPT-homo",
                     "OPT-hetero-plugin-param", "OPT-hetero-plugin-nonparam")
 
-print_summary <- function(metric_col, label) {
-  cat(sprintf("\n===== %s (mean ± MCSE) =====\n", label))
-  for (k in k_grid) {
-    cat(sprintf("\n  k = %d\n", k))
-    for (met in methods_order) {
-      v <- sub_df[[metric_col]][sub_df$method == met & sub_df$k == k]
-      cat(sprintf("    %-28s : %.6f ± %.6f\n", met, mean(v), sd(v) / sqrt(length(v))))
-    }
+cat("\n===== Pseudo Excess Risk (mean ± MCSE) =====\n")
+for (k in k_grid) {
+  cat(sprintf("\n  k = %d\n", k))
+  for (met in methods_order) {
+    v <- sub_df$pseudo_er[sub_df$method == met & sub_df$k == k]
+    cat(sprintf("    %-28s : %.6f ± %.6f\n", met, mean(v), sd(v) / sqrt(length(v))))
   }
 }
-
-print_summary("pred_mse_N",  "Predictive Excess Risk N(MSE-MSE0) [Metric2 analog]")
-print_summary("param_mse_N", "Parameter MSE, unweighted N*mean(diff^2) [Metric3 analog]")
-print_summary("pseudo_er",   "Analytic A-weighted quadratic form (보조지표, Metric1 아님)")
 
 cat("\n===== Test MSE (mean ± MCSE) =====\n")
 for (k in k_grid) {

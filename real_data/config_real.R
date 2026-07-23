@@ -7,3 +7,5 @@ n0          <- 500
 B           <- 300
 seed        <- 42
 result_path <- "../results/real_results.rds"
+rf_mtry <- 4
+rf_nodesize <- 3
